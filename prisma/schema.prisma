@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Workspace {
+  id             String         @id @default(uuid())
+  teamId         String         @unique
+  name           String
+  accessToken    String         // Encrypted
+  installedApps  InstalledApp[]
+  riskAudits     RiskAudit[]
+  createdAt      DateTime       @default(now())
+}
+
+model InstalledApp {
+  id             String         @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id])
+
+  appId          String         // Slack App ID or Service ID
+  appName        String
+  serviceType    String?        // Distinguishes Integrations vs Apps
+
+  scopes         String[]       // Array of granted scopes
+  isClassic      Boolean        // TRUE if scopes contains 'bot'
+
+  addedAt        DateTime       // Timestamp from logs
+  status         AppStatus      @default(ACTIVE)
+
+  @@unique([workspaceId, appId]) // Idempotency constraint
+}
+
+model RiskAudit {
+  id             String      @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace   @relation(fields: [workspaceId], references: [id])
+
+  idempotencyKey String      @unique // Format: "ws_{id}_{date}"
+
+  classicCount   Int
+  modernCount    Int
+
+  scanDate       DateTime    @default(now())
+}
+
+enum AppStatus {
+  ACTIVE
+  REMOVED
+}
