@@ -46,11 +46,24 @@ SlackGuard has evolved from a one-time diagnostic tool into a **subscription-bas
 - ✅ **Background Jobs**: Framework for weekly automated scans
 - ✅ **Email Alerts**: Notify admins when drift is detected (email service integration ready)
 
+### Security & Authentication
+- ✅ **Slack OAuth Integration**: Secure workspace authorization flow
+- ✅ **Token Encryption**: AES-256-GCM encryption for access tokens
+- ✅ **Encrypted Storage**: All sensitive tokens encrypted at rest
+
+### Email & Notifications
+- ✅ **Drift Alert Emails**: Automated alerts for new classic apps, removed apps, and scope changes
+- ✅ **Welcome Emails**: Onboarding email for new PRO subscribers
+- ✅ **Beautiful HTML Templates**: Professional email designs with traffic light categorization
+- ✅ **Resend Integration**: Modern, developer-friendly email service
+
 ### Technical Excellence
 - ✅ Idempotent database operations
 - ✅ Multi-tenancy support with subscription tiers
 - ✅ Transaction-based data consistency
 - ✅ Type-safe with TypeScript throughout
+- ✅ Production-ready Stripe integration
+- ✅ Secure OAuth callback handling
 
 ## Subscription Tiers
 
@@ -105,10 +118,55 @@ SlackGuard has evolved from a one-time diagnostic tool into a **subscription-bas
    cp .env.example .env
    ```
 
-   Edit `.env` and configure:
+   Edit `.env` and configure the **required** variables:
+
+   **Database:**
    ```env
    DATABASE_URL="postgresql://user:password@localhost:5432/slackguard"
-   SESSION_SECRET="your-secret-key-here"
+   ```
+
+   **Encryption (REQUIRED):**
+   ```bash
+   # Generate a secure 32-byte encryption key:
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+   Then add to `.env`:
+   ```env
+   ENCRYPTION_KEY="your_64_character_hex_string"
+   ```
+
+   **Slack OAuth (REQUIRED for production):**
+   - Create a Slack app at https://api.slack.com/apps
+   - Add OAuth scopes: `admin.integrations:read`, `team:read`
+   - Set redirect URL to: `https://yourdomain.com/auth/slack/callback`
+   ```env
+   SLACK_CLIENT_ID="your_client_id"
+   SLACK_CLIENT_SECRET="your_client_secret"
+   SLACK_REDIRECT_URI="https://yourdomain.com/auth/slack/callback"
+   ```
+
+   **Email Service (REQUIRED for drift alerts):**
+   - Create account at https://resend.com
+   - Verify your sending domain
+   ```env
+   RESEND_API_KEY="re_..."
+   FROM_EMAIL="SlackGuard <alerts@yourdomain.com>"
+   SUPPORT_EMAIL="support@yourdomain.com"
+   ```
+
+   **Stripe (REQUIRED for PRO subscriptions):**
+   - Create account at https://stripe.com
+   - Create a recurring price/product
+   - Set up webhook endpoint: `https://yourdomain.com/api/stripe/webhook`
+   ```env
+   STRIPE_SECRET_KEY="sk_live_..."
+   STRIPE_WEBHOOK_SECRET="whsec_..."
+   STRIPE_PRICE_ID_PRO="price_..."
+   ```
+
+   **Application URL:**
+   ```env
+   APP_URL="https://yourdomain.com"
    ```
 
 4. Set up the database:
@@ -124,6 +182,19 @@ SlackGuard has evolved from a one-time diagnostic tool into a **subscription-bas
 
 ## Usage
 
+### Authentication Flow
+
+1. **Install the Slack App:**
+   - Navigate to `/auth/slack/install`
+   - User is redirected to Slack OAuth consent page
+   - After authorization, user is redirected back with access token
+   - Access token is **encrypted** and stored securely
+
+2. **Callback Handling:**
+   - OAuth callback creates/updates workspace in database
+   - Admin email is captured for drift alerts
+   - User is redirected to dashboard automatically
+
 ### Dashboard
 Navigate to `/dashboard?workspaceId=<workspace-id>` to view results or trigger a scan.
 
@@ -136,6 +207,7 @@ Navigate to `/dashboard?workspaceId=<workspace-id>` to view results or trigger a
 - Full access to app details
 - Can export CSV
 - Can trigger unlimited scans with `?scan=true`
+- Receives automated drift alert emails
 
 ### Upgrade Flow
 Navigate to `/upgrade?workspaceId=<workspace-id>` to see pricing and upgrade to PRO.
@@ -178,17 +250,51 @@ The scanner implements a 3-second delay between pagination requests to respect S
 
 - **scanner.server.ts**: Core scanning logic
   - Fetches integration logs from Slack API
+  - **Decrypts access tokens** before API calls
   - Handles pagination with rate limiting
   - **Refined detection**: Checks for `bot` scope WITHOUT granular scopes
   - **Free tier logic**: Enforces one-time scan limit
   - **Drift detection**: Compares current vs previous scans
+  - **Sends drift alert emails** for PRO workspaces
   - Saves results to database with idempotency
   - Exports: `scanWorkspace`, `getLatestScanResult`, `canWorkspaceScan`, `getScanHistory`
+
+- **encryption.server.ts**: Token encryption/decryption
+  - AES-256-GCM encryption for access tokens
+  - Secure key management via environment variables
+  - Migration support for plaintext tokens
+  - Exports: `encrypt`, `decrypt`, `isEncrypted`, `migrateToken`
+
+- **email.server.ts**: Email notification service
+  - Drift alert emails with traffic light categorization
+  - Welcome emails for new PRO subscribers
+  - Beautiful HTML/text templates
+  - Resend API integration
+  - Exports: `sendDriftAlertEmail`, `sendWelcomeEmail`
+
+- **stripe.server.ts**: Payment processing
+  - Checkout session creation
+  - Webhook event handling (subscription lifecycle)
+  - Customer management
+  - Billing portal integration
+  - Exports: `createCheckoutSession`, `handleStripeWebhook`, `createBillingPortalSession`
 
 - **monitoring.server.ts**: Background job framework
   - Weekly drift detection for PRO workspaces
   - Email alert generation
   - Exports: `runWeeklyDriftDetection`, `scheduledMonitoringJob`
+
+### Authentication Routes
+
+- **auth.slack.install.tsx**: OAuth installation flow
+  - Redirects to Slack OAuth consent page
+  - CSRF protection with state parameter
+
+- **auth.slack.callback.tsx**: OAuth callback handler
+  - Exchanges authorization code for access token
+  - Encrypts and stores access token
+  - Captures admin email for notifications
+  - Creates/updates workspace in database
 
 ### Frontend Components
 

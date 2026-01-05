@@ -4,6 +4,8 @@ import type {
   ScanResult,
 } from "~/types/domain";
 import { prisma } from "~/lib/prisma.server";
+import { decrypt, isEncrypted } from "~/lib/encryption.server";
+import { sendDriftAlertEmail, type DriftAlertData } from "~/lib/email.server";
 
 /**
  * Delay utility for rate limiting
@@ -16,8 +18,13 @@ function delay(ms: number): Promise<void> {
  * Fetch all integration logs with pagination and rate limiting
  */
 async function fetchIntegrationLogs(
-  accessToken: string
+  encryptedAccessToken: string
 ): Promise<SlackLogEntry[]> {
+  // Decrypt the access token before use
+  const accessToken = isEncrypted(encryptedAccessToken)
+    ? decrypt(encryptedAccessToken)
+    : encryptedAccessToken; // Fallback for migration period
+
   const allLogs: SlackLogEntry[] = [];
   let currentPage = 1;
   let totalPages = 1;
@@ -417,6 +424,49 @@ export async function scanWorkspace(workspaceId: string): Promise<ScanResult> {
       scopeChanges: drift.scopeChanges.length > 0 ? drift.scopeChanges : undefined,
     },
   });
+
+  // Send drift alert email if PRO tier and drift detected
+  const hasDrift =
+    drift.newClassicApps.length > 0 ||
+    drift.removedApps.length > 0 ||
+    drift.scopeChanges.length > 0;
+
+  if (hasDrift && workspace.subscriptionTier === "PRO" && workspace.adminEmail) {
+    // Get previous apps for drift alert email context
+    const previousApps = await prisma.installedApp.findMany({
+      where: { workspaceId },
+    });
+
+    // Build drift alert data
+    const driftAlertData: DriftAlertData = {
+      workspaceName: workspace.name,
+      newClassicApps: drift.newClassicApps.map((appId) => {
+        const app = processedApps.get(appId);
+        return {
+          name: app?.name || appId,
+          scope: app?.scopes.join(", ") || "",
+        };
+      }),
+      removedClassicApps: drift.removedApps.map((appId) => {
+        const app = previousApps.find((a) => a.appId === appId);
+        return { name: app?.appName || appId };
+      }),
+      scopeEscalations: drift.scopeChanges.map((change) => {
+        const app = processedApps.get(change.appId);
+        return {
+          name: app?.name || change.appId,
+          oldScope: change.oldScopes.join(", "),
+          newScope: change.newScopes.join(", "),
+        };
+      }),
+      dashboardUrl: `${process.env.APP_URL || "http://localhost:3000"}/dashboard?workspaceId=${workspace.id}`,
+    };
+
+    // Send email asynchronously (don't block scan result)
+    sendDriftAlertEmail(workspace.adminEmail, driftAlertData).catch((error) => {
+      console.error("Failed to send drift alert email:", error);
+    });
+  }
 
   // Prepare scan result
   const scanResult: ScanResult = {

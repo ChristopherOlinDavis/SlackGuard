@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { prisma } from "~/lib/prisma.server";
+import { sendWelcomeEmail } from "~/lib/email.server";
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("STRIPE_SECRET_KEY is required");
@@ -117,7 +118,7 @@ export async function handleStripeWebhook(
       }
 
       // Upgrade workspace to PRO
-      await prisma.workspace.update({
+      const workspace = await prisma.workspace.update({
         where: { id: workspaceId },
         data: {
           subscriptionTier: "PRO",
@@ -126,6 +127,14 @@ export async function handleStripeWebhook(
       });
 
       console.log(`[Stripe] Workspace ${workspaceId} upgraded to PRO`);
+
+      // Send welcome email if admin email is available
+      if (workspace.adminEmail) {
+        const dashboardUrl = `${process.env.APP_URL || "http://localhost:3000"}/dashboard?workspaceId=${workspace.id}`;
+        sendWelcomeEmail(workspace.adminEmail, workspace.name, dashboardUrl).catch((error) => {
+          console.error("Failed to send welcome email:", error);
+        });
+      }
       break;
     }
 

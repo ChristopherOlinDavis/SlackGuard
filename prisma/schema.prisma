@@ -11,7 +11,8 @@ model Workspace {
   id                  String              @id @default(uuid())
   teamId              String              @unique
   name                String
-  accessToken         String              // Encrypted
+  accessToken         String              // Encrypted with AES-256-GCM
+  adminEmail          String?             // Email for drift alerts and notifications
 
   // Subscription Management
   subscriptionTier    SubscriptionTier    @default(FREE)
