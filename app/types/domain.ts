@@ -8,6 +8,15 @@ export interface SlackLogEntry {
   date: string;
 }
 
+export type SubscriptionTier = "FREE" | "PRO";
+export type SubscriptionStatus = "ACTIVE" | "CANCELLED" | "TRIAL";
+
+export interface WorkspaceSubscription {
+  subscriptionTier: SubscriptionTier;
+  subscriptionStatus: SubscriptionStatus;
+  hasUsedFreeScan: boolean;
+}
+
 export interface ScanResult {
   classicApps: number;
   modernApps: number;
@@ -29,4 +38,14 @@ export interface SlackIntegrationLogsResponse {
     pages: number;
   };
   error?: string;
+}
+
+export interface ScanHistoryEntry {
+  id: string;
+  classicCount: number;
+  modernCount: number;
+  totalApps: number;
+  newClassicApps: string[];
+  removedApps: string[];
+  scanDate: Date;
 }

@@ -8,13 +8,21 @@ datasource db {
 }
 
 model Workspace {
-  id             String         @id @default(uuid())
-  teamId         String         @unique
-  name           String
-  accessToken    String         // Encrypted
-  installedApps  InstalledApp[]
-  riskAudits     RiskAudit[]
-  createdAt      DateTime       @default(now())
+  id                  String              @id @default(uuid())
+  teamId              String              @unique
+  name                String
+  accessToken         String              // Encrypted
+
+  // Subscription Management
+  subscriptionTier    SubscriptionTier    @default(FREE)
+  subscriptionStatus  SubscriptionStatus  @default(ACTIVE)
+  hasUsedFreeScan     Boolean             @default(false)
+
+  installedApps       InstalledApp[]
+  riskAudits          RiskAudit[]
+  scanHistory         ScanHistory[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 }
 
 model InstalledApp {
@@ -48,7 +56,37 @@ model RiskAudit {
   scanDate       DateTime    @default(now())
 }
 
+model ScanHistory {
+  id             String      @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace   @relation(fields: [workspaceId], references: [id])
+
+  classicCount   Int
+  modernCount    Int
+  totalApps      Int
+
+  // Track changes from previous scan
+  newClassicApps    String[]  @default([])  // App IDs of newly detected classic apps
+  removedApps       String[]  @default([])  // App IDs of apps that were removed
+  scopeChanges      Json?                   // Track apps whose scopes changed
+
+  scanDate       DateTime    @default(now())
+
+  @@index([workspaceId, scanDate])
+}
+
 enum AppStatus {
   ACTIVE
   REMOVED
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  TRIAL
 }

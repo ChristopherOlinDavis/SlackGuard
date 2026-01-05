@@ -71,13 +71,45 @@ async function fetchIntegrationLogs(
 
 /**
  * Parse scopes and determine if app is Classic
- * Classic apps have the 'bot' scope
+ * Classic apps have the 'bot' scope WITHOUT granular scopes
+ * This reduces false positives for apps that are transitioning
  */
 function isClassicApp(scopeString: string | undefined): boolean {
   if (!scopeString) return false;
 
   const scopes = scopeString.split(",").map((s) => s.trim());
-  return scopes.includes("bot");
+
+  // Check if app has 'bot' scope
+  const hasBotScope = scopes.includes("bot");
+
+  if (!hasBotScope) return false;
+
+  // List of granular OAuth scopes that indicate a modern app
+  const granularScopes = [
+    "chat:write",
+    "chat:write.public",
+    "chat:write.customize",
+    "channels:read",
+    "channels:write",
+    "groups:read",
+    "groups:write",
+    "im:read",
+    "im:write",
+    "mpim:read",
+    "mpim:write",
+    "users:read",
+    "users:read.email",
+    "users:write",
+    "team:read",
+    "files:read",
+    "files:write",
+  ];
+
+  // If the app has bot scope AND any granular scopes, it's transitioning (not purely classic)
+  const hasGranularScopes = scopes.some((scope) => granularScopes.includes(scope));
+
+  // Classic = has 'bot' scope WITHOUT granular scopes
+  return hasBotScope && !hasGranularScopes;
 }
 
 /**
@@ -148,9 +180,122 @@ function processLogs(logs: SlackLogEntry[]): Map<string, {
 }
 
 /**
+ * Check if workspace can perform a scan
+ */
+export async function canWorkspaceScan(workspaceId: string): Promise<{
+  canScan: boolean;
+  reason?: string;
+}> {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+  });
+
+  if (!workspace) {
+    return { canScan: false, reason: "Workspace not found" };
+  }
+
+  // PRO tier can always scan
+  if (workspace.subscriptionTier === "PRO") {
+    return { canScan: true };
+  }
+
+  // FREE tier can only scan once
+  if (workspace.subscriptionTier === "FREE") {
+    if (workspace.hasUsedFreeScan) {
+      return {
+        canScan: false,
+        reason: "Free tier allows only one scan. Upgrade to PRO for unlimited scans.",
+      };
+    }
+    return { canScan: true };
+  }
+
+  return { canScan: true };
+}
+
+/**
+ * Detect drift from previous scan
+ */
+async function detectDrift(
+  workspaceId: string,
+  currentApps: Map<string, {
+    id: string;
+    name: string;
+    scopes: string[];
+    isClassic: boolean;
+    addedAt: Date;
+    serviceType?: string;
+    status: "ACTIVE" | "REMOVED";
+  }>
+): Promise<{
+  newClassicApps: string[];
+  removedApps: string[];
+  scopeChanges: Array<{ appId: string; oldScopes: string[]; newScopes: string[] }>;
+}> {
+  // Get previous apps from database
+  const previousApps = await prisma.installedApp.findMany({
+    where: { workspaceId },
+  });
+
+  const newClassicApps: string[] = [];
+  const removedApps: string[] = [];
+  const scopeChanges: Array<{ appId: string; oldScopes: string[]; newScopes: string[] }> = [];
+
+  // Build a map of previous apps
+  const previousAppsMap = new Map(
+    previousApps.map((app) => [app.appId, app])
+  );
+
+  // Detect new classic apps
+  for (const [appId, app] of currentApps) {
+    const previousApp = previousAppsMap.get(appId);
+
+    if (app.status === "ACTIVE" && app.isClassic) {
+      // New classic app detected
+      if (!previousApp || !previousApp.isClassic) {
+        newClassicApps.push(appId);
+      }
+    }
+
+    // Detect scope changes
+    if (previousApp && app.status === "ACTIVE") {
+      const scopesChanged =
+        JSON.stringify(previousApp.scopes.sort()) !== JSON.stringify(app.scopes.sort());
+
+      if (scopesChanged) {
+        scopeChanges.push({
+          appId,
+          oldScopes: previousApp.scopes,
+          newScopes: app.scopes,
+        });
+      }
+    }
+  }
+
+  // Detect removed apps
+  for (const previousApp of previousApps) {
+    const currentApp = currentApps.get(previousApp.appId);
+    if (!currentApp || currentApp.status === "REMOVED") {
+      if (previousApp.status === "ACTIVE") {
+        removedApps.push(previousApp.appId);
+      }
+    }
+  }
+
+  return { newClassicApps, removedApps, scopeChanges };
+}
+
+/**
  * Main scan function
  */
 export async function scanWorkspace(workspaceId: string): Promise<ScanResult> {
+  // Check if workspace can scan
+  const { canScan, reason } = await canWorkspaceScan(workspaceId);
+
+  if (!canScan) {
+    throw new Error(reason || "Cannot perform scan");
+  }
+
   // Fetch workspace from database
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
@@ -165,6 +310,9 @@ export async function scanWorkspace(workspaceId: string): Promise<ScanResult> {
 
   // Process logs to extract apps
   const processedApps = processLogs(logs);
+
+  // Detect drift from previous scan
+  const drift = await detectDrift(workspaceId, processedApps);
 
   // Prepare data for database insertion
   const appsToInsert = Array.from(processedApps.values());
@@ -199,6 +347,14 @@ export async function scanWorkspace(workspaceId: string): Promise<ScanResult> {
         },
       });
     }
+
+    // Mark free scan as used if this is a FREE tier workspace
+    if (workspace.subscriptionTier === "FREE" && !workspace.hasUsedFreeScan) {
+      await tx.workspace.update({
+        where: { id: workspace.id },
+        data: { hasUsedFreeScan: true },
+      });
+    }
   });
 
   // Calculate metrics (only count ACTIVE apps)
@@ -221,6 +377,19 @@ export async function scanWorkspace(workspaceId: string): Promise<ScanResult> {
       idempotencyKey,
       classicCount: classicApps.length,
       modernCount: modernApps.length,
+    },
+  });
+
+  // Save scan history with drift information
+  await prisma.scanHistory.create({
+    data: {
+      workspaceId: workspace.id,
+      classicCount: classicApps.length,
+      modernCount: modernApps.length,
+      totalApps: activeApps.length,
+      newClassicApps: drift.newClassicApps,
+      removedApps: drift.removedApps,
+      scopeChanges: drift.scopeChanges.length > 0 ? drift.scopeChanges : undefined,
     },
   });
 
@@ -278,4 +447,31 @@ export async function getLatestScanResult(
       scopes: app.scopes,
     })),
   };
+}
+
+/**
+ * Get scan history for trend tracking
+ */
+export async function getScanHistory(workspaceId: string, limit: number = 30) {
+  return await prisma.scanHistory.findMany({
+    where: { workspaceId },
+    orderBy: { scanDate: "desc" },
+    take: limit,
+  });
+}
+
+/**
+ * Get workspace subscription info
+ */
+export async function getWorkspaceSubscription(workspaceId: string) {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: {
+      subscriptionTier: true,
+      subscriptionStatus: true,
+      hasUsedFreeScan: true,
+    },
+  });
+
+  return workspace;
 }

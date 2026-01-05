@@ -1,10 +1,20 @@
-# SlackGuard Lite - Deprecation Scanner
+# SlackGuard - Compliance & Monitoring Platform
 
-A scanner to detect "Classic Slack Apps" (Legacy) that will break in November 2026.
+A **subscription-based SaaS platform** to help IT teams track and manage their Slack app compliance before the November 2026 deadline.
 
 ## Overview
 
-SlackGuard Lite uses the Slack API `team.integrationLogs` endpoint to identify apps that use deprecated permissions. Apps containing the deprecated `bot` scope are flagged as "Classic" (Red), while apps with granular permissions (e.g., `chat:write`) are "Modern" (Green).
+SlackGuard uses the Slack API `team.integrationLogs` endpoint to identify apps that use deprecated permissions. Apps containing the deprecated `bot` scope **without granular scopes** are flagged as "Classic" (Red), while apps with modern granular permissions (e.g., `chat:write`) are "Modern" (Green).
+
+### 🆕 SaaS Transformation
+
+SlackGuard has evolved from a one-time diagnostic tool into a **subscription-based compliance platform** with:
+
+- **Freemium Model**: One free scan to hook users, then upgrade to PRO for unlimited monitoring
+- **Trend Tracking**: Track migration progress over time (Red apps decreasing month-over-month)
+- **Drift Detection**: Weekly automated scans detect new classic apps or scope changes
+- **Email Alerts**: Get notified when new risky apps are installed
+- **CSV Exports**: Download Red Lists for IT manager reporting
 
 ## Tech Stack
 
@@ -16,21 +26,58 @@ SlackGuard Lite uses the Slack API `team.integrationLogs` endpoint to identify a
 
 ## Features
 
+### Core Scanning
 - ✅ Detects Classic vs Modern Slack Apps
+- ✅ **Refined Detection Logic**: Checks for `bot` scope WITHOUT granular scopes (reduces false positives)
 - ✅ Visual traffic light dashboard (Red/Green cards)
 - ✅ Rate-limited API calls (respects Slack Tier 2 limits)
 - ✅ Pagination support for large workspaces
+
+### Subscription Features
+- ✅ **Freemium Hook**: One-time free scan for all workspaces
+- ✅ **Blurred Preview**: Free tier sees counts but app names are blurred
+- ✅ **Upgrade CTA**: Prominent "Unlock Full Migration Report" button
+- ✅ **CSV Export**: PRO tier can export Red List for IT reporting
+- ✅ **Unlimited Scans**: PRO tier removes scan limits
+
+### Monitoring & Trend Tracking
+- ✅ **Scan History**: Track migration progress over time
+- ✅ **Drift Detection**: Detect new classic apps, removed apps, and scope changes
+- ✅ **Background Jobs**: Framework for weekly automated scans
+- ✅ **Email Alerts**: Notify admins when drift is detected (email service integration ready)
+
+### Technical Excellence
 - ✅ Idempotent database operations
-- ✅ Risk audit history tracking
-- ✅ Multi-tenancy support
+- ✅ Multi-tenancy support with subscription tiers
+- ✅ Transaction-based data consistency
+- ✅ Type-safe with TypeScript throughout
+
+## Subscription Tiers
+
+### FREE Tier
+- ✅ One-time free scan
+- ✅ See Classic vs Modern app counts (Red/Green cards)
+- ⚠️ App names and details are blurred (only first 3 shown)
+- ❌ No CSV exports
+- ❌ No additional scans without upgrade
+
+### PRO Tier ($49/month)
+- ✅ **Unlimited scans**
+- ✅ Full app list with details
+- ✅ CSV export (Red List)
+- ✅ Historical trend tracking
+- ✅ Weekly drift detection
+- ✅ Email alerts for new classic apps
+- ✅ Priority support
 
 ## Database Schema
 
 ### Models
 
-- **Workspace**: Stores workspace information and access tokens
+- **Workspace**: Stores workspace information, access tokens, and **subscription tier**
 - **InstalledApp**: Tracks all installed apps with their scopes and status
-- **RiskAudit**: Historical audit logs of scan results
+- **RiskAudit**: Historical audit logs of scan results (daily idempotency)
+- **ScanHistory**: Time-series data for trend tracking and drift detection
 
 ## Setup
 
@@ -77,23 +124,49 @@ SlackGuard Lite uses the Slack API `team.integrationLogs` endpoint to identify a
 
 ## Usage
 
-### Running a Scan
+### Dashboard
+Navigate to `/dashboard?workspaceId=<workspace-id>` to view results or trigger a scan.
 
-Navigate to `/dashboard?workspaceId=<workspace-id>&scan=true` to trigger a new scan.
+**First-time users (FREE tier):**
+- Automatically triggers one free scan
+- Shows Red/Green counts with blurred app names
+- Displays "Unlock Full Migration Report" CTA
 
-### Viewing Results
+**PRO users:**
+- Full access to app details
+- Can export CSV
+- Can trigger unlimited scans with `?scan=true`
 
-Navigate to `/dashboard?workspaceId=<workspace-id>` to view the latest scan results.
+### Upgrade Flow
+Navigate to `/upgrade?workspaceId=<workspace-id>` to see pricing and upgrade to PRO.
+
+**Simulated Upgrade:**
+Currently implements a demo upgrade flow. In production, integrate with Stripe or another payment provider.
+
+### CSV Export (PRO only)
+Navigate to `/export-csv?workspaceId=<workspace-id>` to download the Red List as CSV.
+
+### Monitoring Setup
+See [MONITORING_SETUP.md](./MONITORING_SETUP.md) for detailed instructions on setting up weekly drift detection and email alerts.
 
 ## Detection Logic
 
-### Classic Apps (Red)
+### Classic Apps (Red) - Refined Logic
 
-Apps are classified as "Classic" if they contain the `bot` scope. These apps will break in November 2026 and require migration to granular permissions.
+Apps are classified as "Classic" if they meet BOTH criteria:
+1. ✅ Contain the `bot` scope
+2. ❌ Do NOT have any granular OAuth scopes (e.g., `chat:write`, `users:read`)
+
+**Why the refinement?**
+This reduces false positives. Apps that have BOTH `bot` and granular scopes are likely in transition and won't break immediately. Pure classic apps (only `bot` scope) are the highest priority.
 
 ### Modern Apps (Green)
 
-Apps using granular OAuth scopes (e.g., `chat:write`, `users:read`) are ready for the future and don't require action.
+Apps using exclusively granular OAuth scopes are ready for the future and don't require action.
+
+### Transitioning Apps
+
+Apps with BOTH `bot` and granular scopes are classified as Modern (not flagged as high-priority red) but should still be reviewed.
 
 ## API Rate Limiting
 
@@ -106,15 +179,40 @@ The scanner implements a 3-second delay between pagination requests to respect S
 - **scanner.server.ts**: Core scanning logic
   - Fetches integration logs from Slack API
   - Handles pagination with rate limiting
-  - Parses scopes and detects classic apps
+  - **Refined detection**: Checks for `bot` scope WITHOUT granular scopes
+  - **Free tier logic**: Enforces one-time scan limit
+  - **Drift detection**: Compares current vs previous scans
   - Saves results to database with idempotency
+  - Exports: `scanWorkspace`, `getLatestScanResult`, `canWorkspaceScan`, `getScanHistory`
+
+- **monitoring.server.ts**: Background job framework
+  - Weekly drift detection for PRO workspaces
+  - Email alert generation
+  - Exports: `runWeeklyDriftDetection`, `scheduledMonitoringJob`
 
 ### Frontend Components
 
 - **TrafficLight.tsx**: Dashboard visualization
-  - Red card for Classic apps (Action Required)
-  - Green card for Modern apps (Compliant)
-  - Table view with app details and scopes
+  - Subscription-aware UI (FREE vs PRO)
+  - Red/Green cards for Classic/Modern app counts
+  - **Blurred preview** for FREE tier users
+  - **Upgrade CTA overlay** for FREE tier
+  - CSV export button for PRO tier
+  - Full table view with app details and scopes
+
+### Routes
+
+- **dashboard.tsx**: Main dashboard with loader
+  - Checks subscription tier
+  - Enforces scan limits
+  - Passes subscription data to component
+
+- **upgrade.tsx**: Pricing page and simulated upgrade flow
+  - Compares FREE vs PRO tiers
+  - Simulates subscription upgrade (Stripe integration ready)
+
+- **export-csv.tsx**: CSV export endpoint (PRO only)
+  - Generates downloadable Red List CSV
 
 ### Database Operations
 
@@ -122,6 +220,7 @@ The scanner implements a 3-second delay between pagination requests to respect S
 - Upsert operations ensure idempotency
 - Unique constraints prevent duplicate entries
 - Audit trail with daily idempotency keys
+- **ScanHistory** tracks trends over time
 
 ## Development
 
@@ -151,29 +250,72 @@ SlackGuard/
 ├── app/
 │   ├── components/
 │   │   └── Dashboard/
-│   │       └── TrafficLight.tsx
+│   │       └── TrafficLight.tsx          # Subscription-aware dashboard UI
 │   ├── routes/
-│   │   ├── _index.tsx
-│   │   └── dashboard.tsx
+│   │   ├── _index.tsx                    # Home route (redirects to dashboard)
+│   │   ├── dashboard.tsx                 # Main dashboard with scan logic
+│   │   ├── upgrade.tsx                   # Pricing & upgrade flow
+│   │   └── export-csv.tsx                # CSV export endpoint (PRO only)
 │   ├── services/
-│   │   └── scanner.server.ts
+│   │   ├── scanner.server.ts             # Core scanning + drift detection
+│   │   └── monitoring.server.ts          # Background jobs & email alerts
 │   ├── types/
-│   │   └── domain.ts
+│   │   └── domain.ts                     # TypeScript interfaces
 │   ├── entry.client.tsx
 │   ├── entry.server.tsx
 │   ├── root.tsx
 │   └── tailwind.css
 ├── prisma/
-│   └── schema.prisma
+│   └── schema.prisma                     # DB schema with subscriptions
+├── MONITORING_SETUP.md                   # Cron job setup guide
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
 └── tailwind.config.ts
 ```
 
+## SaaS Roadmap & Next Steps
+
+### Production Readiness
+
+- [ ] **Payment Integration**: Integrate Stripe for real subscription management
+- [ ] **Email Service**: Connect SendGrid, AWS SES, or Resend for drift alerts
+- [ ] **Monitoring Jobs**: Set up cron jobs or task queue (see [MONITORING_SETUP.md](./MONITORING_SETUP.md))
+- [ ] **Authentication**: Add Slack OAuth for workspace authorization
+- [ ] **Analytics**: Track conversion rates (FREE → PRO)
+- [ ] **Error Monitoring**: Integrate Sentry or LogRocket
+
+### Future Enhancements
+
+- [ ] **Trend Charts**: Visualize migration progress with Chart.js
+- [ ] **Team Collaboration**: Multi-user access with role-based permissions
+- [ ] **Migration Guides**: In-app documentation for fixing classic apps
+- [ ] **Slack Bot Integration**: Get alerts directly in Slack
+- [ ] **API Access**: REST API for enterprise customers
+- [ ] **White-label**: Custom branding for enterprise plans
+
+### Why This SaaS Model Works
+
+**The Freemium Hook:**
+- Free users see "You have 12 Classic Apps" (creates urgency)
+- But can't see WHICH apps (blurred names create need)
+- This psychological gap drives conversions
+
+**Monthly Subscription Justification:**
+- Compliance is ongoing, not one-time
+- Drift detection = continuous value
+- Track progress month-over-month toward Nov 2026
+- IT managers need reporting tools (CSV exports)
+
+**Target Customer:**
+- IT Managers at companies with 100+ Slack users
+- Standard/Plus Slack plans (have `team.integrationLogs` API)
+- Companies with compliance requirements
+- Price point: $49/month is easy expense approval
+
 ## Contributing
 
-This is a backend and frontend implementation based on the SlackGuard Lite specification. For issues or enhancements, please follow the contribution guidelines.
+This is a complete SaaS platform implementation. For issues or enhancements, please follow the contribution guidelines.
 
 ## License
 
