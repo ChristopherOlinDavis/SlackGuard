@@ -45,8 +45,12 @@ export default function TrafficLight({
         {/* Traffic Light Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           {/* Red Card - Classic Apps */}
-          <div className="bg-red-500 rounded-lg shadow-lg p-6 text-white">
-            <div className="flex items-center justify-between">
+          <div className="bg-red-500 rounded-lg shadow-lg p-6 text-white relative overflow-hidden">
+            {/* Animated 2026 badge */}
+            <div className="absolute top-4 right-4 bg-red-800 bg-opacity-90 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse border-2 border-white shadow-lg">
+              🚨 EOL: Nov 16, 2026
+            </div>
+            <div className="flex items-center justify-between mt-8">
               <div>
                 <h2 className="text-lg font-semibold mb-2">Classic Apps</h2>
                 <p className="text-sm opacity-90">

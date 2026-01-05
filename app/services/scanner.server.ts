@@ -337,6 +337,12 @@ export async function scanWorkspace(workspaceId: string): Promise<ScanResult> {
     throw new Error(`Workspace not found: ${workspaceId}`);
   }
 
+  // Add realistic delay for better UX (makes scan feel more substantial)
+  // In production, the actual API calls provide natural delay
+  // For demo/testing with local data, this creates a better perception
+  const REALISTIC_SCAN_DELAY = 1500; // 1.5 seconds
+  await delay(REALISTIC_SCAN_DELAY);
+
   // Fetch integration logs from Slack
   const logs = await fetchIntegrationLogs(workspace.accessToken);
 

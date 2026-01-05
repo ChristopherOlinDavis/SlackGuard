@@ -218,6 +218,28 @@ Currently implements a demo upgrade flow. In production, integrate with Stripe o
 ### CSV Export (PRO only)
 Navigate to `/export-csv?workspaceId=<workspace-id>` to download the Red List as CSV.
 
+### 🎬 Demo Mode
+
+Perfect for presentations, investor pitches, and product videos!
+
+```bash
+# 1. Create realistic demo data
+npm run demo:seed
+
+# 2. Visit the demo landing page
+open http://localhost:3000/demo
+# Or: npm run demo:open
+```
+
+**What you get:**
+- **2 pre-configured workspaces** (FREE and PRO tier)
+- **Realistic "IT nightmare" scenario** with Classic apps from 2015
+- **Full scan history** showing trends over time
+- **Ready-to-record UI** with 2026 End of Life badge
+- **60-second recording checklist** and script
+
+See [DEMO_GUIDE.md](./DEMO_GUIDE.md) for the complete guide to creating a killer demo video.
+
 ### Monitoring Setup
 See [MONITORING_SETUP.md](./MONITORING_SETUP.md) for detailed instructions on setting up weekly drift detection and email alerts.
 
