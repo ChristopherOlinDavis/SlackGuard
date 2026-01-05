@@ -14,21 +14,26 @@
 ### Core Concept
 Scans Slack workspaces via `team.integrationLogs` API to detect "Classic Apps" (deprecated `bot` scope) vs "Modern Apps" (granular OAuth scopes).
 
-### Key Detection Logic
-```typescript
-// app/services/scanner.server.ts:77
-isClassicApp = has 'bot' scope AND no granular scopes (chat:write, users:read, etc.)
-```
+### 🚨 Scope of Truth (Detection Logic)
 
-**Why?** Reduces false positives. Apps with BOTH `bot` + granular scopes are transitioning (not urgent).
+**The "Red" Criteria (Classic App):**
+- **Must Have**: scope includes `bot`
+- **Must NOT Have**: Granular permissions (e.g., `chat:write`, `users:read`, `channels:read`)
+- **Reasoning**: Apps with BOTH `bot` and `chat:write` are hybrid/modernized. Only "pure" bot-scope apps are at risk.
+
+**The "Ignore" List (False Positive Prevention):**
+- **Incoming Webhooks**: Ignore if `service_type` is `incoming-webhook` or scope is ONLY `incoming-webhook`. (Legacy, but not the Nov 2026 breakage target).
+- **Slash Commands**: Ignore if scope is ONLY `commands`.
+- **Slackbot/System**: Ignore logs where `user_name` is "Slackbot" or "System".
 
 ### Database Schema (Prisma)
 
 ```
 Workspace (multi-tenant)
 ├── subscriptionTier: FREE | PRO
+├── stripeCustomerId: String?
 ├── hasUsedFreeScan: boolean
-├── InstalledApp[] (apps with scopes)
+├── InstalledApp[] (apps with scopes + status)
 ├── RiskAudit[] (daily snapshots)
 └── ScanHistory[] (time-series for trends)
 ```
@@ -38,13 +43,14 @@ Workspace (multi-tenant)
 ```
 app/
 ├── lib/
-│   └── prisma.server.ts          # Singleton Prisma client
+│   ├── prisma.server.ts          # Singleton Prisma client
+│   └── stripe.server.ts          # Stripe Checkout & Webhook handlers
 ├── services/
-│   ├── scanner.server.ts         # Core scanning + drift detection
-│   └── monitoring.server.ts      # Background jobs + email alerts
+│   ├── scanner.server.ts         # Core scanning + scope parsing logic
+│   └── monitoring.server.ts      # Drift detection jobs
 ├── routes/
 │   ├── dashboard.tsx             # Main UI (subscription-aware)
-│   ├── upgrade.tsx               # Pricing page
+│   ├── api.stripe.checkout.ts    # Endpoint to initiate PRO upgrade
 │   └── export-csv.tsx            # PRO-only CSV export
 ├── components/Dashboard/
 │   └── TrafficLight.tsx          # Blurred UI for FREE tier
@@ -65,13 +71,13 @@ canWorkspaceScan() checks:
 - FREE → only if !hasUsedFreeScan
 ```
 
-### Drift Detection
+### Drift Detection (Retention Metric)
 ```typescript
 // app/services/scanner.server.ts:187
 detectDrift() compares current vs previous scans:
-- newClassicApps[] (new risky apps installed)
-- removedApps[] (apps uninstalled)
-- scopeChanges[] (permission changes)
+- 🔴 Bad Drift: New "Classic" app installed (Alert Admin)
+- 🟢 Good Drift: "Classic" app removed or migrated (Celebrate Progress)
+- 🟡 Warning: Scope escalation on existing app
 ```
 
 ### UI Gating (Blurred Preview)
@@ -85,11 +91,12 @@ PRO tier: Full access + CSV export button
 
 | Function | Location | Purpose |
 |----------|----------|---------|
-| `scanWorkspace()` | scanner.server.ts:259 | Main scan with rate limiting |
-| `canWorkspaceScan()` | scanner.server.ts:153 | Subscription gate |
-| `detectDrift()` | scanner.server.ts:187 | Change detection |
-| `runWeeklyDriftDetection()` | monitoring.server.ts:17 | Background job |
-| `TrafficLight` | TrafficLight.tsx:10 | Subscription-aware UI |
+| `scanWorkspace()` | scanner.server.ts | Main scan with rate limiting (Tier 2) |
+| `isClassicApp()` | scanner.server.ts | Strict detection logic (excludes webhooks) |
+| `canWorkspaceScan()` | scanner.server.ts | Subscription gate |
+| `generateStripeCheckout()` | stripe.server.ts | Creates Stripe Session for Upgrade |
+| `detectDrift()` | scanner.server.ts | Compares snapshots for alerts |
+| `TrafficLight` | TrafficLight.tsx | Subscription-aware UI renderer |
 
 ## 📊 Data Flow
 
@@ -104,7 +111,7 @@ scanWorkspace() → Slack API (team.integrationLogs)
   ↓
 processLogs() → filter by change_type: 'added'
   ↓
-isClassicApp() → detect bot scope without granular
+isClassicApp() → Apply "Scope of Truth"
   ↓
 detectDrift() → compare vs previous scan
   ↓
@@ -116,49 +123,47 @@ Prisma transaction:
 TrafficLight renders with tier-based UI
 ```
 
-## 🎨 UI/UX Strategy
-
-### Conversion Psychology
-```
-FREE user sees:
-"You have 12 Classic Apps" ← urgency
-App names: ████████ (blurred) ← need to know
-Big orange CTA: "Unlock Full Migration Report"
-```
-
-### PRO Value Props
-- Unlimited scans
-- Full app visibility
-- CSV export (IT manager reports)
-- Weekly drift detection
-- Email alerts
-
 ## 🔧 Environment Variables
 
 ```env
 DATABASE_URL="postgresql://..."
-SESSION_SECRET="..."
-MONITORING_SECRET_TOKEN="..." (for cron endpoint)
+STRIPE_SECRET_KEY="sk_test_..."
+STRIPE_WEBHOOK_SECRET="whsec_..."
+STRIPE_PRICE_ID_PRO="price_xxx"
+SLACK_CLIENT_ID="..."
+SLACK_CLIENT_SECRET="..."
 ```
 
 ## 🐛 Common Gotchas
 
-1. **Prisma Singleton**: Always import from `~/lib/prisma.server.ts` to avoid connection exhaustion
-2. **Rate Limiting**: 3s delay between Slack API pagination (Tier 2 = 20 req/min)
-3. **FREE Tier Gate**: Check `hasUsedFreeScan` before allowing scan
-4. **CSV Export**: PRO-only (403 for FREE tier)
-5. **Drift Detection**: Only runs for PRO workspaces in monitoring job
+1. **Rate Limiting**: Slack Tier 2 is 20 req/min. You MUST await 3000ms between pagination calls in scanner.server.ts.
+2. **Enterprise Grid**: `team.integrationLogs` only returns data for the specific `team_id`. Do not assume it scans the whole Org.
+3. **Webhook Confusion**: AI often flags "Incoming Webhook" as "Classic." Explicitly check `service_type` to ignore these.
+4. **Free Tier Lockout**: Ensure the "Upgrade" button in TrafficLight.tsx actually redirects to `/api/stripe/checkout`.
+5. **Prisma Singleton**: Always import from `~/lib/prisma.server.ts` to avoid connection exhaustion
+6. **CSV Export**: PRO-only (403 for FREE tier)
 
 ## 🧪 Testing Checklist
 
+- [ ] **False Positive Test**: Create a Webhook-only app; ensure it does NOT show up as Red.
+- [ ] **Pagination Test**: Mock a response with `paging.pages: 3`; verify 3s delay between fetches.
+- [ ] **Free Tier**: Verify "App Names" are unreadable (blurred) but "Counts" are visible.
+- [ ] **Drift**: Install a classic app → Scan → Remove it → Scan again. Verify "Good Drift" is recorded.
 - [ ] FREE tier: One scan allowed, then blocked
-- [ ] FREE tier: App names blurred, CTA shown
 - [ ] PRO tier: Unlimited scans, full access
-- [ ] CSV export: Works for PRO, 403 for FREE
 - [ ] Detection: `bot` only → Classic, `bot` + `chat:write` → Modern
-- [ ] Drift: Detects new classic apps
 
-## 📝 Code Patterns
+## 📝 AI Assistant Instructions
+
+### Tone Check
+- When explaining "Red" risks, be authoritative but calm.
+- **Bad**: "Your workspace is broken and dangerous."
+- **Good**: "Action required: 3 apps rely on deprecated scopes that will cease functioning in Nov 2026."
+
+### Logic Check
+- Always verify `isClassicApp` includes the check `!scopes.includes('chat:write')` to avoid flagging modernized hybrid apps.
+
+## 💡 Code Patterns
 
 ### Subscription Check Pattern
 ```typescript
@@ -195,6 +200,12 @@ npm run db:push
 # Generate Prisma client
 npm run db:generate
 
+# Seed demo data
+npm run db:seed
+
+# Reset and seed
+npm run db:reset
+
 # Dev server
 npm run dev
 ```
@@ -216,9 +227,10 @@ See [ENHANCEMENTS.md](./ENHANCEMENTS.md) for detailed backlog.
 - Freemium conversion is core to business model (keep FREE limited)
 - Drift detection = recurring value = subscription retention
 - CSV export = high-value IT manager feature
+- Never flag incoming webhooks or slash commands as Classic apps
 
 ---
 
 **Last Updated**: 2026-01-05
 **Branch**: `claude/slackguard-lite-scanner-38Erz`
-**Production Ready**: No (demo mode, needs Stripe + email integration)
+**Production Ready**: No (needs Stripe + email integration)

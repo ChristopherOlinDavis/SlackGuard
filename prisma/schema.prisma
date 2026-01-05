@@ -17,6 +17,7 @@ model Workspace {
   subscriptionTier    SubscriptionTier    @default(FREE)
   subscriptionStatus  SubscriptionStatus  @default(ACTIVE)
   hasUsedFreeScan     Boolean             @default(false)
+  stripeCustomerId    String?             // Stripe customer ID for billing
 
   installedApps       InstalledApp[]
   riskAudits          RiskAudit[]

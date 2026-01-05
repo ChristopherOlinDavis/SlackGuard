@@ -2,6 +2,7 @@ import { json, type LoaderFunctionArgs, type ActionFunctionArgs } from "@remix-r
 import { useLoaderData, Form, useNavigation } from "@remix-run/react";
 import { getWorkspaceSubscription } from "~/services/scanner.server";
 import { prisma } from "~/lib/prisma.server";
+import { useState } from "react";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -23,34 +24,66 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
   const workspaceId = formData.get("workspaceId") as string;
+  const mode = formData.get("mode") as string;
 
   if (!workspaceId) {
     throw new Response("Workspace ID is required", { status: 400 });
   }
 
-  // Simulate upgrade to PRO tier
-  // In production, this would integrate with Stripe/payment provider
-  await prisma.workspace.update({
-    where: { id: workspaceId },
-    data: {
-      subscriptionTier: "PRO",
-      subscriptionStatus: "ACTIVE",
-    },
-  });
+  // Demo mode: Directly upgrade without Stripe
+  if (mode === "demo") {
+    await prisma.workspace.update({
+      where: { id: workspaceId },
+      data: {
+        subscriptionTier: "PRO",
+        subscriptionStatus: "ACTIVE",
+      },
+    });
 
-  // Redirect to dashboard with scan enabled
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: `/dashboard?workspaceId=${workspaceId}&scan=true`,
-    },
-  });
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/dashboard?workspaceId=${workspaceId}&scan=true`,
+      },
+    });
+  }
+
+  // Production mode: This should not be reached as we handle Stripe checkout client-side
+  // Keeping it here for backwards compatibility
+  throw new Response("Use Stripe checkout endpoint", { status: 400 });
 }
 
 export default function Upgrade() {
   const { workspaceId, subscription } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const isUpgrading = navigation.state === "submitting";
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+
+  const handleStripeCheckout = async () => {
+    setIsCheckingOut(true);
+    try {
+      const formData = new FormData();
+      formData.append("workspaceId", workspaceId);
+
+      const response = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (data.url) {
+        // Redirect to Stripe Checkout
+        window.location.href = data.url;
+      } else {
+        throw new Error(data.error || "Failed to create checkout session");
+      }
+    } catch (error) {
+      console.error("Checkout error:", error);
+      alert("Failed to start checkout. Please try again.");
+      setIsCheckingOut(false);
+    }
+  };
 
   if (subscription.subscriptionTier === "PRO") {
     return (
@@ -367,14 +400,24 @@ export default function Upgrade() {
                 </span>
               </li>
             </ul>
-            <Form method="post">
+            <button
+              onClick={handleStripeCheckout}
+              disabled={isCheckingOut}
+              className="w-full bg-white text-orange-600 font-bold py-4 px-6 rounded-lg hover:bg-orange-50 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isCheckingOut ? "Redirecting to Checkout..." : "Upgrade to PRO Now"}
+            </button>
+
+            {/* Demo Mode: Hidden form for testing */}
+            <Form method="post" className="mt-2">
               <input type="hidden" name="workspaceId" value={workspaceId} />
+              <input type="hidden" name="mode" value="demo" />
               <button
                 type="submit"
                 disabled={isUpgrading}
-                className="w-full bg-white text-orange-600 font-bold py-4 px-6 rounded-lg hover:bg-orange-50 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full bg-orange-100 text-orange-600 text-sm py-2 px-4 rounded hover:bg-orange-200 transition disabled:opacity-50"
               >
-                {isUpgrading ? "Upgrading..." : "Upgrade to PRO Now"}
+                {isUpgrading ? "Upgrading..." : "Demo Mode (Skip Stripe)"}
               </button>
             </Form>
             <p className="text-xs text-orange-100 mt-4 text-center">

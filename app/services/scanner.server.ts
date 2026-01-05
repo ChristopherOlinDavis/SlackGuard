@@ -68,6 +68,28 @@ async function fetchIntegrationLogs(
 }
 
 /**
+ * Check if log entry should be ignored (false positive prevention)
+ */
+function shouldIgnoreApp(log: SlackLogEntry): boolean {
+  // Ignore incoming webhooks (legacy but not the Nov 2026 target)
+  if (log.service_type === "incoming-webhook") {
+    return true;
+  }
+
+  // Ignore if scope is ONLY incoming-webhook
+  if (log.scope === "incoming-webhook") {
+    return true;
+  }
+
+  // Ignore if scope is ONLY commands (slash commands)
+  if (log.scope === "commands") {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Parse scopes and determine if app is Classic
  * Classic apps have the 'bot' scope WITHOUT granular scopes
  * This reduces false positives for apps that are transitioning
@@ -146,6 +168,11 @@ function processLogs(logs: SlackLogEntry[]): Map<string, {
   );
 
   for (const log of sortedLogs) {
+    // Skip entries that should be ignored (webhooks, slash commands, etc.)
+    if (shouldIgnoreApp(log)) {
+      continue;
+    }
+
     const appId = log.app_id || log.service_id;
     if (!appId) continue;
 
