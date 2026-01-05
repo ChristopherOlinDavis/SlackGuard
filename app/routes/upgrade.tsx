@@ -1,9 +1,7 @@
 import { json, type LoaderFunctionArgs, type ActionFunctionArgs } from "@remix-run/node";
 import { useLoaderData, Form, useNavigation } from "@remix-run/react";
 import { getWorkspaceSubscription } from "~/services/scanner.server";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { prisma } from "~/lib/prisma.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);

@@ -1,11 +1,9 @@
-import { PrismaClient } from "@prisma/client";
 import type {
   SlackLogEntry,
   SlackIntegrationLogsResponse,
   ScanResult,
 } from "~/types/domain";
-
-const prisma = new PrismaClient();
+import { prisma } from "~/lib/prisma.server";
 
 /**
  * Delay utility for rate limiting

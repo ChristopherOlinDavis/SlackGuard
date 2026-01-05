@@ -1,7 +1,5 @@
-import { PrismaClient } from "@prisma/client";
 import { scanWorkspace } from "./scanner.server";
-
-const prisma = new PrismaClient();
+import { prisma } from "~/lib/prisma.server";
 
 /**
  * Background job to scan all PRO workspaces for drift detection
